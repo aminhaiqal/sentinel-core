@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	"sentinel-core/internal/adapter/api"
 	"sentinel-core/internal/adapter/client"
@@ -57,7 +58,7 @@ func main() {
 		log.Fatalf("failed to init genai client: %v", err)
 	}
 
-	gemini := client.NewGeminiClientFromClient(genaiClient, "gemini-1.5-flash")
+	gemini := client.NewGeminiClientFromClient(genaiClient, "gemini-2.5-flash")
 	embedder := client.NewEmbedderFromClient(genaiClient, "text-embedding-004")
 
 	vectorStore := store.NewQdrantStore(qClient, os.Getenv("QDRANT_COLLECTION"))
@@ -70,6 +71,26 @@ func main() {
 	// Inject the adapters into the Orchestration Layer
 	orchestrator := usecase.NewOrchestrator(vectorStore, tokenLimiter, gemini, embedder)
 
+	go func() {
+        log.Println("[SENTINEL-WARMER] Starting pre-warm sequence...")
+        
+        warmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        defer cancel()
+
+        _, err := embedder.CreateEmbedding(warmCtx, "warmup")
+        if err != nil {
+            log.Printf("[SENTINEL-WARMER] Embedder warm-up failed: %v", err)
+        }
+
+        // 2. Warm the LLM (Wakes up the model instance)
+        _, err = gemini.Generate(warmCtx, ".") 
+        if err != nil {
+            log.Printf("[SENTINEL-WARMER] Gemini warm-up failed: %v", err)
+        }
+
+        log.Println("[SENTINEL-WARMER] Pre-warm complete. Gateway is HOT.")
+    }()
+	
 	// Initialize API Layer (Delivery Layer)
 	app := fiber.New(fiber.Config{
 		AppName: "Sentinel-AI Gateway",

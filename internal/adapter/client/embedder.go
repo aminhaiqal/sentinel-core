@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 
 	"google.golang.org/genai"
 )
@@ -34,9 +35,17 @@ func NewEmbedderFromClient(c *genai.Client, model string) *Embedder {
 }
 
 func (e *Embedder) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
-	res, err := e.client.Models.EmbedContent(ctx, e.model, genai.Text(text), nil)
-	if err != nil {
-		return nil, err
-	}
-	return res.Embeddings[0].Values, nil
+    res, err := e.client.Models.EmbedContent(ctx, e.model, genai.Text(text), &genai.EmbedContentConfig{
+        TaskType: "RETRIEVAL_QUERY", 
+    })
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    if len(res.Embeddings) == 0 || len(res.Embeddings[0].Values) == 0 {
+        return nil, fmt.Errorf("no embedding values returned from model")
+    }
+    
+    return res.Embeddings[0].Values, nil
 }

@@ -1,7 +1,9 @@
 # Variables
 COMPOSE_FILE := scripts/docker-compose.yml
-# Use 'podman compose' if you have the plugin, or 'podman-compose' if using the python tool
 COMPOSE_BIN := podman compose 
+
+APP_DIR := .
+APP_BIN := bin/app
 
 .PHONY: help infra-up infra-down infra-restart infra-logs clean
 
@@ -19,5 +21,20 @@ infra-restart: infra-down infra-up ## Restart the infrastructure
 infra-logs: ## Tail logs for all services
 	$(COMPOSE_BIN) -f $(COMPOSE_FILE) logs -f
 
-clean: ## Remove all containers and volumes (Warning: Deletes your DB data)
+infra-clean: ## Remove all containers and volumes (Warning: Deletes your DB data)
 	$(COMPOSE_BIN) -f $(COMPOSE_FILE) down -v
+
+run: ## Run Go app locally (go run)
+	go run $(APP_DIR)/cmd/server/main.go
+
+build: ## Build Go binary
+	mkdir -p bin
+	go build -o $(APP_BIN) $(APP_DIR)/cmd/api/main.go
+
+start: infra-up app-run
+
+app-test: ## Run tests
+	go test ./...
+
+app-clean: ## Remove built binaries
+	rm -rf bin

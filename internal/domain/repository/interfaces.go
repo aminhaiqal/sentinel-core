@@ -6,7 +6,7 @@ import (
 )
 
 type VectorStore interface {
-	Search(ctx context.Context, vector []float32) (*entity.AIResponse, error)
+	Search(ctx context.Context, vector []float32, threshold float32) (*entity.AIResponse, error)
 	Save(ctx context.Context, prompt string, resp *entity.AIResponse, vector []float32) error
 }
 

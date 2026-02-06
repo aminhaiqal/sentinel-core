@@ -3,10 +3,11 @@ package store
 import (
 	"context"
 	"sentinel-core/internal/domain/entity"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type QdrantStore struct {
@@ -22,13 +23,10 @@ func NewQdrantStore(client *qdrant.Client, collectionName string) *QdrantStore {
 }
 
 func (s *QdrantStore) InitCollection(ctx context.Context, dim uint64) error {
-	// Use GetCollectionInfo to check if it exists
 	_, err := s.client.GetCollectionInfo(ctx, s.collectionName)
-
 	if err != nil {
-		// In Qdrant's Go SDK, if a collection is missing, it usually returns a gRPC error
-		// containing "Not Found". If the error is nil, the collection exists.
-		if strings.Contains(err.Error(), "Not Found") || strings.Contains(err.Error(), "404") {
+		st, ok := status.FromError(err)
+		if ok && st.Code() == codes.NotFound {
 			return s.client.CreateCollection(ctx, &qdrant.CreateCollection{
 				CollectionName: s.collectionName,
 				VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
@@ -37,23 +35,23 @@ func (s *QdrantStore) InitCollection(ctx context.Context, dim uint64) error {
 				}),
 			})
 		}
-		return err // Some other connection error
+		return err
 	}
-
-	return nil // Collection already exists
+	return nil
 }
 
-func (s *QdrantStore) Search(ctx context.Context, vector []float32) (*entity.AIResponse, error) {
+func (s *QdrantStore) Search(ctx context.Context, vector []float32, threshold float32) (*entity.AIResponse, error) {
 	// Query Qdrant for the closest match
 	res, err := s.client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: s.collectionName,
 		Query:          qdrant.NewQuery(vector...),
 		Limit:          qdrant.PtrOf(uint64(1)),
 		WithPayload:    qdrant.NewWithPayload(true),
+		ScoreThreshold: &threshold,
 	})
-	if err != nil || len(res) == 0 || res[0].Score < 0.90 { // Threshold for "semantic hit"
-		return nil, nil
-	}
+	if err != nil || len(res) == 0 {
+        return nil, nil
+    }
 
 	// Map payload back to AIResponse
 	return &entity.AIResponse{
