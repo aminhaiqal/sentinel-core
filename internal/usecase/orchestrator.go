@@ -12,48 +12,76 @@ type Orchestrator struct {
 	tokenLimiter repository.TokenLimiter
 	aiProvider   repository.AIProvider
 	embedder     repository.Embedder
+	evaluator    repository.Evaluator
 }
 
-func NewOrchestrator(vs repository.VectorStore, tl repository.TokenLimiter, ai repository.AIProvider, emb repository.Embedder) *Orchestrator {
-	return &Orchestrator{vectorStore: vs, tokenLimiter: tl, aiProvider: ai, embedder: emb}
+func NewOrchestrator(vs repository.VectorStore, tl repository.TokenLimiter, ai repository.AIProvider, emb repository.Embedder, ev repository.Evaluator) *Orchestrator {
+	return &Orchestrator{vectorStore: vs, tokenLimiter: tl, aiProvider: ai, embedder: emb, evaluator:    ev}
 }
 
 func (u *Orchestrator) Execute(ctx context.Context, req entity.AIRequest) (*entity.AIResponse, error) {
-    // 1. Check Rate Limits
+    // 1. Redaction (PII Masking) - Optional but recommended here
+    // req.Prompt = u.redactor.Redact(req.Prompt)
+
+    // 2. Check Rate Limits
     allowed, err := u.tokenLimiter.CheckLimit(ctx, req.UserID)
-    if err != nil {
-        return nil, fmt.Errorf("rate limiter check failed: %w", err)
-    }
-    if !allowed {
+    if err != nil || !allowed {
         return nil, entity.ErrRateLimitExceeded
     }
 
-    // 2. Generate Embedding
+    // 3. Generate Embedding
     vector, err := u.embedder.CreateEmbedding(ctx, req.Prompt)
     if err != nil {
         return nil, fmt.Errorf("embedding generation failed: %w", err)
     }
 
-    // 3. Semantic Cache Lookup
-    cachedResp, err := u.vectorStore.Search(ctx, vector, 0.80)
-    if err == nil && cachedResp != nil {
-        cachedResp.Cached = true
-        return cachedResp, nil
+    // 4. Semantic Cache Lookup 
+    // IMPORTANT: We use a slightly lower threshold here to "catch" candidates for the Judge
+    const searchThreshold = 0.75 
+    cachedResp, score, originalPrompt, err := u.vectorStore.Search(ctx, vector, searchThreshold)
+    
+    // LOG ALWAYS: This helps you debug when nothing happens
+    if err != nil {
+        fmt.Printf("[SENTINEL] Cache search error: %v\n", err)
+    } else if cachedResp == nil {
+        fmt.Printf("[SENTINEL] Cache Miss: No candidates found above %.2f\n", searchThreshold)
     }
 
-    // 4. Call AI Provider (Gemini/Claude)
+    if cachedResp != nil {
+        // TIER 1: Extreme Confidence
+        if score > 0.96 {
+            fmt.Printf("[SENTINEL] High-Confidence HIT (Score: %.4f)\n", score)
+            cachedResp.Cached = true
+            return cachedResp, nil
+        }
+
+        // TIER 2: The "Ambiguity Zone" - Ask the Judge
+        fmt.Printf("[SENTINEL] Ambiguous Candidate (Score: %.4f). Original: \"%s\"\n", score, originalPrompt)
+        fmt.Println("[SENTINEL] Calling Judge...")
+        
+        isMatch := u.evaluator.IsMatch(ctx, req.Prompt, originalPrompt)
+        
+        if isMatch {
+            fmt.Println("[SENTINEL] Judge Approved: Intent matches. Returning Cache.")
+            cachedResp.Cached = true
+            return cachedResp, nil
+        }
+        
+        fmt.Println("[SENTINEL] Judge Rejected: Intent differs. Proceeding to AI Provider.")
+    }
+
+    // 5. Call AI Provider
     resp, err := u.aiProvider.Generate(ctx, req.Prompt)
     if err != nil {
-        return nil, fmt.Errorf("AI provider generation failed: %w", err)
+        return nil, err
     }
 
-    // 5. Background: Update usage and cache (Async)
-    fmt.Println("[SENTINEL] Saving to cache and updating usage in background...")
+    // 6. Background Update
     go func() {
-        // We use context.Background() because the request context might expire
         bgCtx := context.Background()
         u.vectorStore.Save(bgCtx, req.Prompt, resp, vector)
         u.tokenLimiter.Increment(bgCtx, req.UserID, resp.TokenCount)
+        fmt.Println("[SENTINEL] Background: Cache updated.")
     }()
 
     return resp, nil

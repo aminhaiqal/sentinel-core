@@ -60,6 +60,7 @@ func main() {
 
 	gemini := client.NewGeminiClientFromClient(genaiClient, "gemini-2.5-flash")
 	embedder := client.NewEmbedderFromClient(genaiClient, "text-embedding-004")
+	evaluator := client.NewGeminiEvaluator(genaiClient, "gemini-2.5-flash")
 
 	vectorStore := store.NewQdrantStore(qClient, os.Getenv("QDRANT_COLLECTION"))
 	if err := vectorStore.InitCollection(ctx, 768); err != nil {
@@ -69,7 +70,7 @@ func main() {
 	tokenLimiter := store.NewRedisLimiter(rdb, tokenLimit)
 
 	// Inject the adapters into the Orchestration Layer
-	orchestrator := usecase.NewOrchestrator(vectorStore, tokenLimiter, gemini, embedder)
+	orchestrator := usecase.NewOrchestrator(vectorStore, tokenLimiter, gemini, embedder, evaluator)
 
 	go func() {        
         warmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -6,7 +6,7 @@ import (
 )
 
 type VectorStore interface {
-	Search(ctx context.Context, vector []float32, threshold float32) (*entity.AIResponse, error)
+	Search(ctx context.Context, vector []float32, threshold float32) (*entity.AIResponse, float32, string, error)
 	Save(ctx context.Context, prompt string, resp *entity.AIResponse, vector []float32) error
 }
 
@@ -21,4 +21,8 @@ type AIProvider interface {
 
 type Embedder interface {
 	CreateEmbedding(ctx context.Context, text string) ([]float32, error)
+}
+
+type Evaluator interface {
+    IsMatch(ctx context.Context, userPrompt, cachedPrompt string) bool
 }

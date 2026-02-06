@@ -40,24 +40,33 @@ func (s *QdrantStore) InitCollection(ctx context.Context, dim uint64) error {
 	return nil
 }
 
-func (s *QdrantStore) Search(ctx context.Context, vector []float32, threshold float32) (*entity.AIResponse, error) {
-	// Query Qdrant for the closest match
-	res, err := s.client.Query(ctx, &qdrant.QueryPoints{
-		CollectionName: s.collectionName,
-		Query:          qdrant.NewQuery(vector...),
-		Limit:          qdrant.PtrOf(uint64(1)),
-		WithPayload:    qdrant.NewWithPayload(true),
-		ScoreThreshold: &threshold,
-	})
-	if err != nil || len(res) == 0 {
-        return nil, nil
+func (s *QdrantStore) Search(ctx context.Context, vector []float32, threshold float32) (*entity.AIResponse, float32, string, error) {
+    res, err := s.client.Query(ctx, &qdrant.QueryPoints{
+        CollectionName: s.collectionName,
+        Query:          qdrant.NewQuery(vector...),
+        Limit:          qdrant.PtrOf(uint64(1)),
+        WithPayload:    qdrant.NewWithPayload(true),
+        ScoreThreshold: &threshold,
+    })
+
+    // If error or no results found above threshold
+    if err != nil || len(res) == 0 {
+        return nil, 0, "", err
     }
 
-	// Map payload back to AIResponse
-	return &entity.AIResponse{
-		Content: res[0].Payload["content"].GetStringValue(),
-		Cached:  true,
-	}, nil
+    hit := res[0]
+    payload := hit.Payload
+
+    // Extract the original prompt and content from payload
+    originalPrompt := payload["prompt"].GetStringValue()
+    content := payload["content"].GetStringValue()
+
+    response := &entity.AIResponse{
+        Content: content,
+        Cached:  true,
+    }
+
+    return response, hit.Score, originalPrompt, nil
 }
 
 func (s *QdrantStore) Save(ctx context.Context, prompt string, resp *entity.AIResponse, vector []float32) error {
