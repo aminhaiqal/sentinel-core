@@ -6,8 +6,8 @@ import (
 )
 
 type VectorStore interface {
-	Search(ctx context.Context, vector []float32, threshold float32) (*entity.AIResponse, float32, string, error)
-	Save(ctx context.Context, prompt string, resp *entity.AIResponse, vector []float32) error
+	Search(ctx context.Context, vector []float32, threshold float32, filters map[string]string) (*entity.AIResponse, float32, string, error)
+	Save(ctx context.Context, prompt string, resp *entity.AIResponse, vector []float32, metadata map[string]any) error
 }
 
 type TokenLimiter interface {
@@ -25,4 +25,8 @@ type Embedder interface {
 
 type Evaluator interface {
     IsMatch(ctx context.Context, userPrompt, cachedPrompt string) bool
+}
+
+type Extractor interface {
+    ExtractMetadata(ctx context.Context, prompt string) map[string]string
 }
