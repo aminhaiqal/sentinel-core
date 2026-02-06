@@ -71,9 +71,7 @@ func main() {
 	// Inject the adapters into the Orchestration Layer
 	orchestrator := usecase.NewOrchestrator(vectorStore, tokenLimiter, gemini, embedder)
 
-	go func() {
-        log.Println("[SENTINEL-WARMER] Starting pre-warm sequence...")
-        
+	go func() {        
         warmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
         defer cancel()
 
