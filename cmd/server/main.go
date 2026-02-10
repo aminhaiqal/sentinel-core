@@ -59,13 +59,13 @@ func main() {
 	}
 
 	primaryModel := client.NewGeminiClientFromClient(genaiClient, "gemini-2.5-flash")
-	fallbackModel := client.NewGeminiClientFromClient(genaiClient, "gemini-1.5-flash")
+	fallbackModel := client.NewGeminiClientFromClient(genaiClient, "gemini-2.5-flash-lite")
 
 	resilientProvider := usecase.NewResilientProvider(primaryModel, fallbackModel)
 
 	embedder := client.NewEmbedderFromClient(genaiClient, "text-embedding-004")
 	evaluator := client.NewGeminiEvaluator(genaiClient, "gemini-2.5-flash")
-	extractor := client.NewGeminiExtractor(genaiClient, "gemini-3-flash")
+	extractor := client.NewGeminiExtractor(genaiClient, "gemini-2.5-flash")
 
 	vectorStore := store.NewQdrantStore(qClient, os.Getenv("QDRANT_COLLECTION"))
 	if err := vectorStore.InitCollection(ctx, 768); err != nil {

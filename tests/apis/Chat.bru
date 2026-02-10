@@ -4,10 +4,17 @@ meta {
   seq: 3
 }
 
-get {
-  url: http://127.0.0.1:3000/health
-  body: none
+post {
+  url: http://127.0.0.1:3000/v1/chat
+  body: json
   auth: inherit
+}
+
+body:json {
+  {
+    "user_id": "user-01",
+    "prompt": "Who is my favorite artist"
+  }
 }
 
 settings {
