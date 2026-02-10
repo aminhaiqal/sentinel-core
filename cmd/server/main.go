@@ -58,10 +58,14 @@ func main() {
 		log.Fatalf("failed to init genai client: %v", err)
 	}
 
-	gemini := client.NewGeminiClientFromClient(genaiClient, "gemini-2.5-flash")
+	primaryModel := client.NewGeminiClientFromClient(genaiClient, "gemini-2.5-flash")
+	fallbackModel := client.NewGeminiClientFromClient(genaiClient, "gemini-1.5-flash")
+
+	resilientProvider := usecase.NewResilientProvider(primaryModel, fallbackModel)
+
 	embedder := client.NewEmbedderFromClient(genaiClient, "text-embedding-004")
 	evaluator := client.NewGeminiEvaluator(genaiClient, "gemini-2.5-flash")
-	extractor := client.NewGeminiExtractor(genaiClient, "gemini-2.5-flash")
+	extractor := client.NewGeminiExtractor(genaiClient, "gemini-3-flash")
 
 	vectorStore := store.NewQdrantStore(qClient, os.Getenv("QDRANT_COLLECTION"))
 	if err := vectorStore.InitCollection(ctx, 768); err != nil {
@@ -71,26 +75,26 @@ func main() {
 	tokenLimiter := store.NewRedisLimiter(rdb, tokenLimit)
 
 	// Inject the adapters into the Orchestration Layer
-	orchestrator := usecase.NewOrchestrator(vectorStore, tokenLimiter, gemini, embedder, evaluator, extractor)
+	orchestrator := usecase.NewOrchestrator(vectorStore, tokenLimiter, resilientProvider, embedder, evaluator, extractor)
 
-	go func() {        
-        warmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
+	go func() {
+		warmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 
-        _, err := embedder.CreateEmbedding(warmCtx, "warmup")
-        if err != nil {
-            log.Printf("[SENTINEL-WARMER] Embedder warm-up failed: %v", err)
-        }
+		_, err := embedder.CreateEmbedding(warmCtx, "warmup")
+		if err != nil {
+			log.Printf("[SENTINEL-WARMER] Embedder warm-up failed: %v", err)
+		}
 
-        // 2. Warm the LLM (Wakes up the model instance)
-        _, err = gemini.Generate(warmCtx, ".") 
-        if err != nil {
-            log.Printf("[SENTINEL-WARMER] Gemini warm-up failed: %v", err)
-        }
+		// 2. Warm the LLM (Wakes up the model instance)
+		_, err = resilientProvider.Generate(warmCtx, ".")
+		if err != nil {
+			log.Printf("[SENTINEL-WARMER] Gemini warm-up failed: %v", err)
+		}
 
-        log.Println("[SENTINEL-WARMER] Pre-warm complete. Gateway is HOT.")
-    }()
-	
+		log.Println("[SENTINEL-WARMER] Pre-warm complete. Gateway is HOT.")
+	}()
+
 	// Initialize API Layer (Delivery Layer)
 	app := fiber.New(fiber.Config{
 		AppName: "Sentinel-AI Gateway",

@@ -13,7 +13,7 @@ type Orchestrator struct {
 	aiProvider   repository.AIProvider
 	embedder     repository.Embedder
 	evaluator    repository.Evaluator
-	extractor 	 repository.Extractor
+	extractor    repository.Extractor
 }
 
 func NewOrchestrator(vs repository.VectorStore, tl repository.TokenLimiter, ai repository.AIProvider, emb repository.Embedder, ev repository.Evaluator, ex repository.Extractor) *Orchestrator {
@@ -21,74 +21,82 @@ func NewOrchestrator(vs repository.VectorStore, tl repository.TokenLimiter, ai r
 }
 
 func (u *Orchestrator) Execute(ctx context.Context, req entity.AIRequest) (*entity.AIResponse, error) {
-    // 1. Check Rate Limits
-    allowed, err := u.tokenLimiter.CheckLimit(ctx, req.UserID)
-    if err != nil || !allowed {
-        return nil, entity.ErrRateLimitExceeded
-    }
+	// 1. Guard Rail: Rate Limiting
+	if err := u.validateRateLimit(ctx, req.UserID); err != nil {
+		return nil, err
+	}
+
+	// 2. Pre-processing: Metadata & Embeddings
 	extractedMeta := u.extractor.ExtractMetadata(ctx, req.Prompt)
-	fmt.Printf("[SENTINEL] Extracted Metadata: %v\n", extractedMeta)
-    
-	// 2. Generate Embedding
-    vector, err := u.embedder.CreateEmbedding(ctx, req.Prompt)
-    if err != nil {
-        return nil, fmt.Errorf("embedding generation failed: %w", err)
-    }
+	vector, err := u.embedder.CreateEmbedding(ctx, req.Prompt)
+	if err != nil {
+		return nil, fmt.Errorf("embedding failed: %w", err)
+	}
 
-    // 3. Prepare Filters for Metadata (Fixes Test 3)
-    // We add user_id by default to prevent cross-user data leaks
-    filters := map[string]string{"user_id": req.UserID}
-    for k, v := range extractedMeta {
-        filters[k] = v
-    }
+	// 3. Cache Strategy: Try to find an existing answer
+	if cachedResp := u.tryGetCachedResponse(ctx, req.Prompt, req.UserID, vector, extractedMeta); cachedResp != nil {
+		return cachedResp, nil
+	}
 
-    // 4. Semantic Cache Lookup with Filters
-    cachedResp, score, originalPrompt, err := u.vectorStore.Search(ctx, vector, 0.75, extractedMeta)
-    
-    if err != nil {
-        fmt.Printf("[SENTINEL] Cache search error: %v\n", err)
-    }
+	// 4. Provider Strategy: Generate new answer
+	resp, err := u.aiProvider.Generate(ctx, req.Prompt)
+	if err != nil {
+		return nil, err
+	}
 
-    if cachedResp != nil {
-        // TIER 1: Extreme Confidence
-        if score > 0.98 { // Slightly increased for metadata-filtered hits
-            fmt.Printf("[SENTINEL] High-Confidence HIT (Score: %.4f)\n", score)
-            cachedResp.Cached = true
-            return cachedResp, nil
-        }
+	// 5. Post-processing: Async updates
+	u.asyncBackgroundUpdate(req, resp, vector, extractedMeta)
 
-        // TIER 2: Ambiguity Zone
-        fmt.Printf("[SENTINEL] Ambiguous Candidate (Score: %.4f). Calling Judge...\n", score)
-        if u.evaluator.IsMatch(ctx, req.Prompt, originalPrompt) {
-            fmt.Println("[SENTINEL] Judge Approved: Intent matches.")
-            cachedResp.Cached = true
-            return cachedResp, nil
-        }
-        fmt.Println("[SENTINEL] Judge Rejected: Intent differs.")
-    }
+	return resp, nil
+}
 
-    // 5. Call AI Provider
-    resp, err := u.aiProvider.Generate(ctx, req.Prompt)
-    if err != nil {
-        return nil, err
-    }
+// --- Private Helpers ---
 
-    // 6. Background Update (Including Metadata)
-    go func() {
-        bgCtx := context.Background()
-        
-        // Prepare the payload metadata to be saved
-        saveMetadata := map[string]any{
-            "user_id": req.UserID,
-        }
-        for k, v := range req.Metadata {
-            saveMetadata[k] = v
-        }
+func (u *Orchestrator) validateRateLimit(ctx context.Context, userID string) error {
+	allowed, err := u.tokenLimiter.CheckLimit(ctx, userID)
+	if err != nil || !allowed {
+		return entity.ErrRateLimitExceeded
+	}
+	return nil
+}
 
-        u.vectorStore.Save(bgCtx, req.Prompt, resp, vector, saveMetadata)
-        u.tokenLimiter.Increment(bgCtx, req.UserID, resp.TokenCount)
-        fmt.Println("[SENTINEL] Background: Cache updated with metadata.")
-    }()
+func (u *Orchestrator) tryGetCachedResponse(ctx context.Context, prompt, userID string, vector []float32, meta map[string]string) *entity.AIResponse {
+	// Prepare scoped filters (User ID + Extracted Intent)
+	filters := map[string]string{"user_id": userID}
+	for k, v := range meta {
+		filters[k] = v
+	}
 
-    return resp, nil
+	cachedResp, score, originalPrompt, err := u.vectorStore.Search(ctx, vector, 0.75, filters)
+	if err != nil || cachedResp == nil {
+		return nil
+	}
+
+	// TIER 1: Instant Hit
+	if score > 0.98 {
+		cachedResp.Cached = true
+		return cachedResp
+	}
+
+	// TIER 2: Human-like evaluation (Judge)
+	if u.evaluator.IsMatch(ctx, prompt, originalPrompt) {
+		cachedResp.Cached = true
+		return cachedResp
+	}
+
+	return nil
+}
+
+func (u *Orchestrator) asyncBackgroundUpdate(req entity.AIRequest, resp *entity.AIResponse, vector []float32, meta map[string]string) {
+	go func() {
+		bgCtx := context.Background()
+		saveMeta := make(map[string]any)
+		for k, v := range meta {
+			saveMeta[k] = v
+		}
+		saveMeta["user_id"] = req.UserID
+
+		_ = u.vectorStore.Save(bgCtx, req.Prompt, resp, vector, saveMeta)
+		_ = u.tokenLimiter.Increment(bgCtx, req.UserID, resp.TokenCount)
+	}()
 }

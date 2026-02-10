@@ -29,7 +29,7 @@ run: ## Run Go app locally (go run)
 
 build: ## Build Go binary
 	mkdir -p bin
-	go build -o $(APP_BIN) $(APP_DIR)/cmd/api/main.go
+	go build -o $(APP_BIN) $(APP_DIR)/cmd/server/main.go
 
 start: infra-up app-run
 
